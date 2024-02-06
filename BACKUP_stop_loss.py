@@ -1,18 +1,21 @@
-from flask import Flask, render_template, request, jsonify
-from flask_socketio import SocketIO
+from flask import request, jsonify
 import yfinance as yf
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import threading
 from telegram import Bot
+from telegram import ParseMode
 import datetime
 import time
-# Importe a função de inserção do módulo externo
-from banco_dados import inserir_preco_atingido, consultar_precos_atingidos
+from app import create_app
 
-app = Flask(__name__)
-socketio = SocketIO(app)  # Crie uma instância do SocketIO
+
+# Use create_app para obter o app configurado
+app, socketio = create_app(5001, 'indexloss.html')
+
+#app = Flask(__name__)
+#socketio = SocketIO(app, cors_allowed_origins="*")
 
 
 dados_inseridos = []
@@ -22,18 +25,9 @@ lock = threading.Lock()
 HORARIO_INICIO_PREGAO = datetime.time(13, 0, 0)
 HORARIO_FIM_PREGAO = datetime.time(21, 0, 0)
 INTERVALO_VERIFICACAO = 50
-TEMPO_ACUMULADO_MAXIMO = 120
-token_telegram = '6750587978:AAG-kPsoLKaL0tTebyc-JCZ-bkG9jZbN7fs'
+TEMPO_ACUMULADO_MAXIMO = 1500
+token_telegram = '6357672250:AAFfn3fIDi-3DS3a4DuuD09Lf-ERyoMgGSY'  # Substitua pelo seu token do Telegram - DO @xande_trade_bot
 
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/banco_dados')
-def banco_de_dados():
-    dados_do_banco = consultar_precos_atingidos()
-    return render_template('banco_dados.html', dados_do_banco=dados_do_banco)
 
 
 @socketio.on('mensagem_do_script')
@@ -71,6 +65,7 @@ def receber_dados():
     return jsonify({"status": "success"})
 
 
+
 # Adicione a nova rota para exclusão
 @app.route('/excluir/<identificador>', methods=['DELETE'])
 def excluir_registro(identificador):
@@ -90,9 +85,13 @@ def excluir_registro(identificador):
 
     return jsonify({"status": "success", "message": mensagem})
 
+
+
+
 def imprimir_mensagem(mensagem):
     print(mensagem)
     socketio.emit('atualizar_mensagens', {'mensagem': mensagem})
+
 
 def processar_dados(dados):
     threads = []
@@ -172,7 +171,7 @@ def verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao, iden
                     imprimir_mensagem("Início das buscas ocorrerá no mesmo dia.")
                 else:
                     # Caso contrário, inicia as buscas no próximo dia
-                    proximo_dia = agora + datetime.timedelta(hours=14)
+                    proximo_dia = agora + datetime.timedelta(hours=16)
                     proximo_dia = proximo_dia.replace(hour=HORARIO_INICIO_PREGAO.hour, minute=0, second=0,
                                                       microsecond=0)
                     imprimir_mensagem("Início das buscas ocorrerá no dia seguinte.")
@@ -241,43 +240,39 @@ def verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao, iden
     except Exception as e:
         imprimir_mensagem(f"Ocorreu um erro ao verificar o preço para {ticker_symbol}: {str(e)}")
 
+
+
 # Função para notificar o preço-alvo atingido
 def notificar_preco_alvo_alcancado(ticker_symbol, preco_alvo, preco_atual, destinatario, operacao, token_telegram):
     ticker_symbol_sem_extensao = ticker_symbol.replace('.SA', '')
     preco_atual_formatado = "{:.2f}".format(preco_atual)
 
-    # Altere a linha abaixo para incluir apenas data_atual, ticker_simbol, preco_alvo e preco_atual
-    inserir_preco_atingido(operacao.upper(), ticker_symbol, preco_alvo, preco_atual, data_saida='', stop_loss=0)
-    imprimir_mensagem(f"Dados inseridos no banco de dados para {ticker_symbol}, Preço Atual: {preco_atual}")
-
     if (operacao == 'compra' and preco_atual >= preco_alvo) or (operacao == 'venda' and preco_atual <= preco_alvo):
-        if operacao == 'venda':
-            mensagem_operacao = "VENDA A DESCOBERTO"
-        else:
-            mensagem_operacao = operacao.upper()
-
-        mensagem = f"Operação de {mensagem_operacao} na ação {ticker_symbol_sem_extensao} foi ativada, conforme nossa Lista Semanal! \nPreço alvo de {preco_alvo:.2f} foi atingido ou ultrapassado. \nPreço atual: {preco_atual_formatado}\n\n\n\n\n"
-        mensagem_compliance = "COMPLIANCE: Esta mensagem é uma sugestão de compra/venda baseada em nossa lista Semanal. A compra ou venda é de total decisão e responsabilidade do Destinatário. Este e-mail contém informação CONFIDENCIAL de propriedade do Canal 1milhao e de seu DESTINATÁRIO tão somente. Se você NÃO for DESTINATÁRIO ou pessoa autorizada a recebê-lo, NÃO PODE usar, copiar, transmitir, retransmitir ou divulgar seu conteúdo (no todo ou em partes), estando sujeito às penalidades da LEI. A Lista de Ações do Canal 1milhao é devidamente REGISTRADA."
+        mensagem = f"ENCERRAMENTO da Operaçao em {ticker_symbol_sem_extensao} foi ativada! STOP LOSS {preco_alvo:.2f} foi atingido ou ultrapassado. Preço atual: {preco_atual_formatado}\n\n\n\n\n"
+        mensagem_compliance = "Esta mensagem é uma SUGESTÃO de ENCERRAMENTO DE OPERAÇÃO baseada em nossa lista semanal"
         mensagem += mensagem_compliance
         imprimir_mensagem(mensagem)
 
-        assunto = f"*ALERTA* Ativada a Operação de {mensagem_operacao} em {ticker_symbol_sem_extensao}"
+        assunto = f"Notificação Canal 1 Milhão de Preço Alvo Atingido para {ticker_symbol_sem_extensao}"
         remetente = 'testeestudos2024@gmail.com'
         senha_ou_token = 'fuba dsun jpdk wqnu'  # ou seu token, se estiver usando
 
         # Chamar a função enviar_notificacao apenas uma vez
         try:
             enviar_notificacao(destinatario, assunto, mensagem, remetente, senha_ou_token, token_telegram)
-            imprimir_mensagem("Enviando notificações aos clientes ...")
+            imprimir_mensagem("Enviando notificações aos clientes por e-mail e Telegram ...")
         except Exception as e:
             imprimir_mensagem(f"Erro ao enviar notificação: {str(e)}")
-
 
 # Variáveis compartilhadas para o estado de cada ticker
 estados_tickers = {}
 
+# ...
+
 # Variáveis compartilhadas para o estado de cada ticker
 estados_tickers_var = {}
+
+
 
 # Função para enviar e-mail
 def enviar_email(destinatario, assunto, corpo, remetente, senha_ou_token):
@@ -299,10 +294,10 @@ def enviar_notificacao(destinatario, assunto, corpo, remetente, senha_ou_token, 
 
     # Enviar mensagem no Telegram
     bot = Bot(token=token_telegram)
-    chat_id = '-1002046197953'  # Substitua pelo seu ID de chat do Telegram - CHAT ID DO GRUPO ALERTA TRADES
-    mensagem_telegram = f"{corpo}\n\nRobot Canal 1 Milhão."
-    bot.send_message(chat_id=chat_id, text=mensagem_telegram)
+    chat_id = '-1002094232063'  # Substitua pelo seu ID de chat do Telegram - CHAT ID DO GRUPO ALERTA TRADES
+    mensagem_telegram = f"{corpo}\n\nEste é um aviso automático do Robot Canal 1 milhao."
+    bot.send_message(chat_id=chat_id, text=mensagem_telegram, parse_mode=ParseMode.MARKDOWN)
+
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
-
+    socketio.run(app, port=5001, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

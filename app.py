@@ -14,5 +14,6 @@ def create_app(port, template_name):
 
 # Adicione a seguinte linha para exportar a instância de SocketIO
 socketio = SocketIO()
+app, socketio = create_app(5001, 'indexloss.html')
 
 
