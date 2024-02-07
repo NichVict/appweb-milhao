@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Web</title>
+    <!-- Adicione os links para as bibliotecas do Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Adicione a biblioteca Socket.IO -->
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+</head>
+<body class="container mt-5">
+    <h1 class="mb-4">ORDENS DE COMPRA E VENDA - ROBOT ALERTA CANAL DO MILHAO</h1>
+    <form id="formulario">
+        <div class="mb-3">
+            <label for="ticker_symbol" class="form-label">Ticker Symbol:</label>
+            <input type="text" class="form-control" id="ticker_symbol" required>
+        </div>
+
+        <div class="mb-3">
+            <label for="preco_alvo" class="form-label">Preço Alvo:</label>
+            <input type="number" class="form-control" id="preco_alvo" required>
+        </div>
+
+        <div class="mb-3">
+            <label for="destinatario" class="form-label">E-mail do Destinatário:</label>
+            <input type="email" class="form-control" id="destinatario" required>
+        </div>
+
+        <div class="mb-3">
+            <label for="operacao" class="form-label">Operação:</label>
+            <select class="form-select" id="operacao" required>
+                <option value="compra">Compra</option>
+                <option value="venda">Venda</option>
+            </select>
+
+            <button type="button" class="btn btn-primary" onclick="inserirDados()">Inserir</button>
+            <button type="button" class="btn btn-success" onclick="enviarDados()">Enviar</button>
+            <button type="button" class="btn btn-warning" onclick="reiniciarDados()">Reiniciar</button>
+        </div>
+    </form>
+
+    <div class="mt-4">
+        <h5>Dados Inseridos:</h5>
+        <div id="dados_inseridos"></div>
+    </div>
+
+    <div class="mt-4">
+        <h5>MENSAGENS DE MONITORAMENTO DO SERVIDOR:</h5>
+        <div id="mensagens_script"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let dadosInseridosAnteriores = JSON.parse(localStorage.getItem("dadosInseridos")) || [];
+        let identificador = 1;  // Adicionado identificador inicial
+
+        function inserirDados() {
+            const tickerSymbol = document.getElementById('ticker_symbol').value;
+            const precoAlvo = document.getElementById('preco_alvo').value;
+            const destinatario = document.getElementById('destinatario').value;
+            const operacao = document.getElementById('operacao').value;
+
+            // Adiciona um identificador único para cada registro
+            const novoRegistro = {
+                identificador: identificador++,
+                operacao: operacao,
+                tickerSymbol: tickerSymbol,
+                precoAlvo: precoAlvo,
+                destinatario: destinatario,
+            };
+
+            dadosInseridosAnteriores.push(novoRegistro);
+
+            // Atualiza o localStorage
+            localStorage.setItem("dadosInseridos", JSON.stringify(dadosInseridosAnteriores));
+
+            // Atualiza a exibição dos dados
+            atualizarExibicaoDados();
+
+            // Limpa os campos do formulário
+            document.getElementById('ticker_symbol').value = '';
+            document.getElementById('preco_alvo').value = '';
+            document.getElementById('destinatario').value = '';
+            document.getElementById('operacao').value = '';
+        }
+
+        function enviarDados() {
+            const dadosNaoProcessados = dadosInseridosAnteriores.filter(dado => !dado.processadoNoServidor);
+
+            fetch('/enviar', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(dadosNaoProcessados),
+            }).then(response => response.json()).then(data => {
+                const mensagemDiv = document.getElementById('mensagem_envio');
+                mensagemDiv.innerHTML = '<p class="text-success">Ordens enviadas com sucesso!</p>';
+                console.log(data);
+
+                // Atualiza o status de processado no servidor para os dados enviados
+                dadosInseridosAnteriores = dadosInseridosAnteriores.map(dado => {
+                    if (!dado.processadoNoServidor) {
+                        dado.processadoNoServidor = true;
+                    }
+                    return dado;
+                });
+
+                // Atualiza o localStorage
+                localStorage.setItem("dadosInseridos", JSON.stringify(dadosInseridosAnteriores));
+
+                // Atualiza a exibição dos dados
+                atualizarExibicaoDados();
+            });
+        }
+
+        function reiniciarDados() {
+            // Mantém apenas os dados que foram processados pelo servidor
+            dadosInseridosAnteriores = dadosInseridosAnteriores.filter(dado => dado.processadoNoServidor);
+
+            // Atualiza o localStorage
+            localStorage.setItem("dadosInseridos", JSON.stringify(dadosInseridosAnteriores));
+
+            // Atualiza a exibição dos dados
+            atualizarExibicaoDados();
+
+            const mensagemDiv = document.getElementById('mensagem_envio');
+            mensagemDiv.innerHTML = '<p class="text-info">Dados reiniciados com sucesso!</p>';
+        }
+
+        function atualizarMensagensScript(mensagem) {
+            const mensagensScriptDiv = document.getElementById('mensagens_script');
+            mensagensScriptDiv.innerHTML += `<p>${mensagem}</p>`;
+        }
+
+        function excluirDados(identificador) {
+            // Enviar solicitação DELETE para excluir o registro no servidor
+            fetch(`/excluir/${identificador}`, {
+                method: 'DELETE',
+            }).then(response => response.json()).then(data => {
+                if (data.status === "success") {
+                    // Remove o registro da lista local
+                    dadosInseridosAnteriores = dadosInseridosAnteriores.filter(dado => dado.identificador !== identificador);
+
+                    // Atualiza o localStorage
+                    localStorage.setItem("dadosInseridos", JSON.stringify(dadosInseridosAnteriores));
+
+                    // Atualiza a exibição dos dados
+                    atualizarExibicaoDados();
+
+                    const mensagemDiv = document.getElementById('mensagem_envio');
+                    mensagemDiv.innerHTML = `<p class="text-success">${data.message}</p>`;
+                    console.log(data);
+                } else {
+                    console.error(data.message);
+                }
+            });
+        }
+
+
+        // Função para carregar dados do Local Storage ao carregar a página
+        function carregarDadosDoLocalStorage() {
+            const dadosArmazenados = JSON.parse(localStorage.getItem("dadosInseridos")) || [];
+            dadosInseridosAnteriores = dadosArmazenados;
+
+            // Atualiza a exibição dos dados
+            atualizarExibicaoDados();
+        }
+
+        // Executa a função de carregar dados ao carregar a página
+        carregarDadosDoLocalStorage();
+
+        function atualizarExibicaoDados() {
+            // Obtém os dados do localStorage
+            const dadosArmazenados = JSON.parse(localStorage.getItem("dadosInseridos")) || [];
+
+            // Atualiza os dadosInseridosAnteriores com os dados do localStorage
+            dadosInseridosAnteriores = dadosArmazenados;
+
+            const dadosInseridosDiv = document.getElementById('dados_inseridos');
+            dadosInseridosDiv.innerHTML = '';
+
+            dadosInseridosAnteriores.forEach(dado => {
+                const novoParagrafo = document.createElement('p');
+                novoParagrafo.innerHTML = `${dado.operacao} | ${dado.tickerSymbol} | ${dado.precoAlvo} | ${dado.destinatario}`;
+
+                const novoBotao = document.createElement('button');
+                novoBotao.className = 'btn btn-danger';
+                novoBotao.textContent = 'Excluir';
+                novoBotao.onclick = () => excluirDados(dado.identificador);
+
+                novoParagrafo.appendChild(novoBotao);
+                dadosInseridosDiv.appendChild(novoParagrafo);
+            });
+        }
+
+        var socket = io.connect('http://127.0.0.1:5000');
+
+        socket.on('connect', function() {
+            console.log('Conectado ao servidor WebSocket');
+        });
+
+        socket.on('atualizar_mensagens', function(data) {
+            console.log('Mensagem recebida:', data.mensagem);
+            atualizarMensagensScript(data.mensagem);
+        });
+    </script>
+</body>
+</html>
+
+
+
+
+
