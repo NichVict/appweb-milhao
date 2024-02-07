@@ -22,7 +22,7 @@ lock = threading.Lock()
 HORARIO_INICIO_PREGAO = datetime.time(13, 0, 0)
 HORARIO_FIM_PREGAO = datetime.time(21, 0, 0)
 INTERVALO_VERIFICACAO = 50
-TEMPO_ACUMULADO_MAXIMO = 120
+TEMPO_ACUMULADO_MAXIMO = 1500
 token_telegram = '6750587978:AAG-kPsoLKaL0tTebyc-JCZ-bkG9jZbN7fs'
 
 
@@ -262,8 +262,8 @@ def notificar_preco_alvo_alcancado(ticker_symbol, preco_alvo, preco_atual, desti
         imprimir_mensagem(mensagem)
 
         assunto = f"*ALERTA* Ativada a Operação de {mensagem_operacao} em {ticker_symbol_sem_extensao}"
-        remetente = 'testeestudos2024@gmail.com'
-        senha_ou_token = 'fuba dsun jpdk wqnu'  # ou seu token, se estiver usando
+        remetente = 'avisoscanal1milhao@gmail.com'
+        senha_ou_token = 'anoe gegm boqj ldzo'  # ou seu token, se estiver usando
 
         # Chamar a função enviar_notificacao apenas uma vez
         try:
