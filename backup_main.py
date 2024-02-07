@@ -1,19 +1,14 @@
 from flask import Flask, render_template, request, jsonify
-from flask_socketio import SocketIO, emit
-import json
+from flask_socketio import SocketIO
 import yfinance as yf
-import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import re
 import threading
 from telegram import Bot
 from telegram import ParseMode
 import datetime
 import time
-from flask import copy_current_request_context
-
 
 
 app = Flask(__name__)
@@ -28,7 +23,8 @@ HORARIO_INICIO_PREGAO = datetime.time(13, 0, 0)
 HORARIO_FIM_PREGAO = datetime.time(21, 0, 0)
 INTERVALO_VERIFICACAO = 50
 TEMPO_ACUMULADO_MAXIMO = 1500
-token_telegram = '6357672250:AAFfn3fIDi-3DS3a4DuuD09Lf-ERyoMgGSY'  # Substitua pelo seu token do Telegram - DO @xande_trade_bot
+token_telegram = '6357672250:AAFfn3fIDi-3DS3a4DuuD09Lf-ERyoMgGSY'
+
 
 @app.route('/')
 def index():
@@ -55,6 +51,11 @@ def receber_dados():
     dados_recebidos = request.get_json()
     print("Dados Recebidos:", dados_recebidos)
 
+    # Filtrar apenas o último identificador (o maior número)
+    if dados_recebidos:
+        ultimo_identificador = max(dado['identificador'] for dado in dados_recebidos)
+        dados_inseridos = [dado for dado in dados_inseridos if dado['identificador'] != ultimo_identificador]
+
     # Adicionar os dados à lista
     dados_inseridos.extend(dados_recebidos)
 
@@ -62,6 +63,8 @@ def receber_dados():
     processar_dados(dados_recebidos)
 
     return jsonify({"status": "success"})
+
+
 
 # Adicione a nova rota para exclusão
 @app.route('/excluir/<identificador>', methods=['DELETE'])
@@ -71,20 +74,17 @@ def excluir_registro(identificador):
     # Converta o identificador para um tipo adequado (por exemplo, int)
     identificador = int(identificador)
 
-    # Procure o registro com base no identificador
-    registro_para_excluir = next((registro for registro in dados_inseridos if registro.get('identificador') == identificador), None)
+    # Crie uma nova lista que contém apenas os registros que não serão excluídos
+    dados_inseridos = [registro for registro in dados_inseridos if registro.get('identificador') != identificador]
 
-    if registro_para_excluir:
-        # Obtenha o tickerSymbol do registro
-        ticker_symbol = registro_para_excluir.get('tickerSymbol', 'N/A')
-        dados_inseridos.remove(registro_para_excluir)
-        mensagem = f"Registro com identificador {identificador} do Ticker {ticker_symbol} excluído com sucesso."
-        imprimir_mensagem(mensagem)
-        return jsonify({"status": "success", "message": mensagem})
-    else:
-        mensagem = f"Nenhum registro encontrado com identificador {identificador}."
-        imprimir_mensagem(mensagem)
-        return jsonify({"status": "error", "message": mensagem}), 404
+    # Obtenha o Ticker do registro excluído, ou 'identificador' se não encontrado
+    ticker_symbol = next((registro.get('tickerSymbol', 'identificador') for registro in dados_inseridos if registro.get('identificador') == identificador), 'identificador')
+
+    mensagem = f"Processando Exclusão de Ordem Enviada ao Servidor, id: {identificador}"
+    imprimir_mensagem(mensagem)
+
+    return jsonify({"status": "success", "message": mensagem})
+
 
 
 
@@ -92,21 +92,28 @@ def imprimir_mensagem(mensagem):
     print(mensagem)
     socketio.emit('atualizar_mensagens', {'mensagem': mensagem})
 
+
 def processar_dados(dados):
     threads = []
+
+    # Filtra apenas os dados do último identificador
+    ultimo_identificador = max(dado['identificador'] for dado in dados)
+    dados_filtrados = [dado for dado in dados if dado['identificador'] == ultimo_identificador]
+
     # Adicione aqui a lógica para processar os dados no lado do servidor
-    for dado in dados:
-        identificador = dado.get('identificador')  # Certifique-se de que seus dados tenham um campo 'identificador'
+    for dado in dados_filtrados:
+        identificador = dado.get('identificador')
         ticker_symbol = dado['tickerSymbol']
         preco_alvo = dado['precoAlvo']
         destinatario = dado['destinatario']
         operacao = dado['operacao']
 
-
-        imprimir_mensagem(f"Dados recebidos: Operação: {operacao}, Ticker: {ticker_symbol}, Preço Alvo: {preco_alvo}")
+        imprimir_mensagem(
+            f"Dados recebidos: Id: {identificador}, Operação: {operacao}, Ticker: {ticker_symbol}, Preço Alvo: {preco_alvo}")
 
         # Inicie uma nova thread para verificar o preço-alvo
-        thread = threading.Thread(target=verificar_preco_alvo, args=(ticker_symbol, preco_alvo, destinatario, operacao, identificador))
+        thread = threading.Thread(target=verificar_preco_alvo,
+                                  args=(ticker_symbol, preco_alvo, destinatario, operacao, identificador))
         thread.start()
         threads.append(thread)
 
@@ -115,9 +122,8 @@ def processar_dados(dados):
         thread.join()
 
     # Enviar identificadores em processamento para o cliente
-    socketio.emit('atualizar_identificadores_processamento', {'identificadoresProcessamento': dados})
-        # Agora, chame A FUNCAO verificar_preco_alvo com os dados apropriados
-        #verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao)
+    socketio.emit('atualizar_identificadores_processamento', {'identificadoresProcessamento': dados_filtrados})
+
 
 # Função para verificar o preço-alvo
 def verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao, identificador):
@@ -137,34 +143,49 @@ def verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao, iden
 
     tempo_acumulado = 0
     dentro_do_pregao = False
+    primeira_verificacao = False  # Adiciona uma flag para controlar a primeira verificação
 
     try:
-        primeira_verificacao = False  # Adiciona uma flag para controlar a primeira verificação
 
         while True:
             # Obtém o preço atual
-            preco_atual = ticker_data.history(period='60s')['Close'].iloc[-1]
+            preco_atual = ticker_data.history(period='3d')['Close'].iloc[-1]
 
             # Verifica se estamos dentro do horário do pregão
             horario_pregao = datetime.datetime.now().time()
 
             if HORARIO_INICIO_PREGAO <= horario_pregao <= HORARIO_FIM_PREGAO:
                 # Coloque aqui o código que você deseja executar durante o pregão
-                imprimir_mensagem("Dentro do horário do pregão. Realizando buscas...")
+                if not primeira_verificacao:
+                    imprimir_mensagem(f"Dentro do horário do pregão. Realizando buscas do ticker {ticker_symbol}...")
+                    primeira_verificacao = True
             else:
-                imprimir_mensagem("Fora do horário do pregão. Aguardando até o próximo dia de negociação...")
+                imprimir_mensagem("Fora do horário do pregão. Aguardando até o início do pregão...")
 
                 agora = datetime.datetime.now()
-                proximo_dia = agora + datetime.timedelta(hours=16)
-                proximo_dia = proximo_dia.replace(hour=HORARIO_INICIO_PREGAO.hour, minute=0, second=0, microsecond=0)
+                inicio_pregao_hoje = agora.replace(hour=HORARIO_INICIO_PREGAO.hour, minute=0, second=0, microsecond=0)
+
+                # Se o horário atual for antes do início do pregão, inicia as buscas hoje
+                if agora < inicio_pregao_hoje:
+                    proximo_dia = inicio_pregao_hoje
+                    imprimir_mensagem("Início das buscas ocorrerá no mesmo dia.")
+                else:
+                    # Caso contrário, inicia as buscas no próximo dia
+                    proximo_dia = agora + datetime.timedelta(hours=16)
+                    proximo_dia = proximo_dia.replace(hour=HORARIO_INICIO_PREGAO.hour, minute=0, second=0,
+                                                      microsecond=0)
+                    imprimir_mensagem("Início das buscas ocorrerá no dia seguinte.")
+
                 tempo_espera = (proximo_dia - agora).total_seconds()
                 time.sleep(tempo_espera)
-                continue  # Continua para o próximo ticker no próximo dia
+
+                continue  # Continua para o próximo ticker no mesmo dia ou no próximo dia
+
 
             # Verifica se o registro ainda está presente
             if not any(registro.get('identificador') == identificador for registro in dados_inseridos):
                 imprimir_mensagem(
-                    f"Registro com identificador {identificador} excluído. Interrompendo o processamento.")
+                    f"Ordem do ticker {ticker_symbol} excluída do Servidor com sucesso!")
                 break
 
             # Verifica se o preço atingiu ou ultrapassou o alvo
@@ -199,14 +220,14 @@ def verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao, iden
                             if tempo_acumulado >= TEMPO_ACUMULADO_MAXIMO:
                                 notificar_preco_alvo_alcancado(ticker_symbol, preco_alvo, preco_atual, destinatario,
                                                                operacao, token_telegram)
-                                imprimir_mensagem(f"Ticker {ticker_symbol} atingiu o preço-alvo. Notificação enviada.")
+                                imprimir_mensagem(f"Ticker {ticker_symbol} atingiu o tempo acumulado de 26 min durante o pregão. Notificações para e-mail e Telegram enviadas com sucesso!")
                                 # Não verifica mais o ticker no mesmo dia
                                 break
                     else:
                         # Se não atender aos critérios, volta ao estado 0
                         estados_tickers[ticker_symbol] = 0
                         imprimir_mensagem(
-                            f"Ticker {ticker_symbol} não atingiu o preço-alvo pela segunda vez. Continuando a verificação.")
+                            f"Ticker {ticker_symbol} não acumulou 26 minutos durante o pregão . Continuando a verificação.")
                         break  # Não verifica mais o ticker no mesmo dia
                 else:
                     # Se não estiver no estado 1 ou 2, continua verificando
@@ -214,7 +235,7 @@ def verificar_preco_alvo(ticker_symbol, preco_alvo, destinatario, operacao, iden
                     break  # Não verifica mais o ticker no mesmo dia
 
             # Adiciona um intervalo de tempo para evitar verificações frequentes
-            time.sleep(INTERVALO_VERIFICACAO)  # Aguarda 30 segundos entre as verificações
+            time.sleep(INTERVALO_VERIFICACAO)  # Aguarda 50 segundos entre as verificações
 
     except Exception as e:
         imprimir_mensagem(f"Ocorreu um erro ao verificar o preço para {ticker_symbol}: {str(e)}")
@@ -232,12 +253,12 @@ def notificar_preco_alvo_alcancado(ticker_symbol, preco_alvo, preco_atual, desti
 
         assunto = f"Notificação Canal 1 Milhão de Preço Alvo Atingido para {ticker_symbol_sem_extensao}"
         remetente = 'testeestudos2024@gmail.com'
-        senha_ou_token = 'dxjz bkse kyyb htvh'  # ou seu token, se estiver usando
+        senha_ou_token = 'fuba dsun jpdk wqnu'  # ou seu token, se estiver usando
 
         # Chamar a função enviar_notificacao apenas uma vez
         try:
             enviar_notificacao(destinatario, assunto, mensagem, remetente, senha_ou_token, token_telegram)
-            imprimir_mensagem("Notificação enviada com sucesso!")
+            imprimir_mensagem("Enviando notificações aos clientes ...")
         except Exception as e:
             imprimir_mensagem(f"Erro ao enviar notificação: {str(e)}")
 
@@ -278,4 +299,4 @@ def enviar_notificacao(destinatario, assunto, corpo, remetente, senha_ou_token, 
 
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
